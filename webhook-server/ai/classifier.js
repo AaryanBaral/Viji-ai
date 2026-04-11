@@ -9,7 +9,8 @@ const PRODUCT_CODE_PATTERN = /[A-Z]{2,3}[-]?\d{3,}/;
 const DEVANAGARI_PATTERN = /[\u0900-\u097F]/;
 
 // Fast-path product search matchers
-const PRODUCT_PART_KEYWORDS = /\b(pump|filter|brake|clutch|bearing|gasket|belt|seal|pad|disc|drum|rotor|injector|nozzle|valve|ring|piston|alternator|starter|radiator|thermostat|sensor|relay|switch|lamp|bulb|fuse|spring|shock|strut|bushing|kit|set|assembly|assy|coolant|wiper|cable|chain|sprocket|carburetor|headlight|taillight|mirror|horn|tyre|tire|wheel|hub)\b/i;
+// Covers all product types with 100+ items in DB (209K products, 573 water pumps, etc.)
+const PRODUCT_PART_KEYWORDS = /\b(pump|filter|brake|clutch|bearing|gasket|belt|seal|pad|disc|drum|rotor|injector|nozzle|valve|ring|piston|alternator|starter|radiator|thermostat|sensor|relay|switch|lamp|bulb|fuse|spring|shock|strut|bushing|kit|set|assembly|assy|coolant|wiper|cable|chain|sprocket|carburetor|headlight|taillight|mirror|horn|tyre|tire|wheel|hub|hose|cover|panel|pipe|shaft|bracket|plate|gear|steering|bumper|door|fender|wiring|harness|clamp|connector|regulator|handle|latch|lock|window|glass|windshield|body|chassis|fuel|air|cabin|battery|washer|bolt|nut|rubber|muffler|exhaust|cylinder|compressor|condenser|silencer|lever|arm|mount|axle|caliper|flywheel|turbo|manifold|camshaft|crankshaft|stud)\b/i;
 const VEHICLE_MODEL_KEYWORDS = /\b(bolero|scorpio|thar|xuv|nexon|swift|baleno|brezza|innova|fortuner|creta|venue|i20|i10|alto|dzire|ertiga|vitara|ecosport|duster|kwid|triber|ciaz|ignis|wagon\s*r|seltos|sonet|punch|harrier|safari|altroz|tigor|tiago|hexa|marazzo|xylo|kuv|pik.?up)\b/i;
 const FAST_PATH_BLOCKERS = /\b(order|cart|status|problem|fix|repair|diagnos|issue|how|what|why|when|can|do you|does|which|recommend|suggest|help|compare|difference|between|best|cheap|discount|catalog|history|my orders|payment|install|replace|broken|not working)\b/i;
 
@@ -21,7 +22,9 @@ function isSimpleProductQuery(text) {
   if (wordCount < 1 || wordCount > 6) return false;
   if (/[?]/.test(t)) return false;
   if (FAST_PATH_BLOCKERS.test(t)) return false;
-  if (DEVANAGARI_PATTERN.test(t)) return false;   // handled by qwen path
+  // Allow Devanagari through if it also contains English product keywords
+  // (common in voice: "वाटर pump", "brake pad चाहियो", etc.)
+  if (DEVANAGARI_PATTERN.test(t) && !PRODUCT_PART_KEYWORDS.test(t)) return false;
   if (PRODUCT_CODE_PATTERN.test(t)) return false;  // product codes → Claude for cart ops
   return PRODUCT_PART_KEYWORDS.test(t) || VEHICLE_MODEL_KEYWORDS.test(t);
 }

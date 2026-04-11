@@ -227,7 +227,6 @@ module.exports = function createWebhookRoutes({ routeMessage, conversationManage
       console.log(`Rate limited: ${phoneNumber}`);
       return;
     }
-    const tmpPath = `/tmp/voice_${Date.now()}.ogg`;
     try {
       const _t0 = Date.now();
 
@@ -250,36 +249,33 @@ module.exports = function createWebhookRoutes({ routeMessage, conversationManage
         return;
       }
 
-      // Step 2: Download audio file
+      // Step 2: Download audio file — keep in memory (skip disk I/O)
       const mediaUrl = mediaRes.data.url;
       const _tDl = Date.now();
       const fileRes = await axiosKeepAlive.get(mediaUrl, {
         headers: { Authorization: 'Bearer ' + process.env.WHATSAPP_API_KEY },
         responseType: 'arraybuffer'
       });
-      await require('fs').promises.writeFile(tmpPath, Buffer.from(fileRes.data));
-      console.log(`[PERF] voice download: ${Date.now() - _tDl}ms`);
+      const audioBuffer = Buffer.from(fileRes.data);
+      console.log(`[PERF] voice download: ${Date.now() - _tDl}ms (${(audioBuffer.length / 1024).toFixed(0)}KB)`);
 
-      // Step 3: Transcribe
+      // Step 3: Transcribe directly from buffer (no disk write/read round-trip)
       let transcript = '';
       const _tSTT = Date.now();
       try {
-        transcript = await transcribeAudio(tmpPath);
+        transcript = await transcribeAudio(audioBuffer, '.ogg');
         console.log(`[PERF] voice STT: ${Date.now() - _tSTT}ms`);
-        console.log(`[voice] Transcribed: ${transcript}`);
       } catch (tErr) {
         console.warn('[voice] Transcription failed:', tErr.message);
       }
-
-      // Step 4: Cleanup (fire-and-forget)
-      require('fs').promises.unlink(tmpPath).catch(() => {});
 
       if (!transcript || transcript.trim().length === 0) {
         await sendWhatsAppMessage(phoneNumber, 'Sorry, I could not understand the voice message. Please type instead. 🙏');
         return;
       }
 
-      // Step 5: Process as regular message — log user msg fire-and-forget, don't block AI
+      // Step 4: Process as regular message — log user msg fire-and-forget, don't block AI
+      console.log(`[voice] 🎤 Transcript for ${phoneNumber}: "${transcript}" (${Date.now() - _t0}ms since start)`);
       const history = session.conversationHistory;
       conversationManager.logMessage(session.sessionId, phoneNumber, session.customer?.id || null, 'user', transcript, 'voice');
       const result = await routeMessage(transcript, session, history);
@@ -294,7 +290,6 @@ module.exports = function createWebhookRoutes({ routeMessage, conversationManage
 
     } catch (error) {
       console.error('❌ handleVoiceMessage error:', error.message);
-      require('fs').promises.unlink(tmpPath).catch(() => {});
       try { await sendWhatsAppMessage(phoneNumber, 'Sorry, I could not process the voice message. Please type instead. 🙏'); } catch(e) {}
     }
   }
