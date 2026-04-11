@@ -5,7 +5,7 @@
 const axios = require('axios');
 const { CUSTOMER_CARE_PHONE, supabase } = require('../shared');
 const { handleConversation, handleConversationStream } = require('./handleConversation');
-const { classifyMessage, isSimpleProductQuery, aiStats } = require('./classifier');
+const { classifyMessage, isSimpleProductQuery, stripPrefix, aiStats } = require('./classifier');
 const { getEmbedding } = require('../db/embeddingService');
 const { getAvailabilityStatus } = require('../services/productService');
 const { CONFIG } = require('./llmGateway');
@@ -36,11 +36,15 @@ async function callOllama(message, model, session) {
 async function fastProductSearch(query, session) {
   const start = Date.now();
   try {
+    // Strip conversational prefix for cleaner vector + keyword search
+    const cleanQuery = stripPrefix(query);
+    console.log(`[fast-search] query="${query}" → clean="${cleanQuery}"`);
+
     // Run embedding + keyword fallback in parallel
-    const embeddingPromise = getEmbedding(query);
+    const embeddingPromise = getEmbedding(cleanQuery);
 
     // Parse query into parts for keyword fallback
-    const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+    const words = cleanQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
     const keywordPromise = supabase
       .from('products').select('*').eq('is_active', true)
       .or(words.map(w => `name.ilike.%${w}%`).join(','))
@@ -54,10 +58,35 @@ async function fastProductSearch(query, session) {
       match_count: 5
     });
 
-    // Merge: prefer vector results, fall back to keyword
-    let data = (!vectorError && vectorData && vectorData.length > 0)
-      ? vectorData
-      : (keywordRes.data && keywordRes.data.length > 0 ? keywordRes.data : null);
+    // ── Smart merge: exact name matches beat vector similarity ──
+    // Vector search for "water pump" can return fuel/oil pumps (semantically close).
+    // Keyword search finds actual WATER PUMP products. Prefer keyword results
+    // when they contain the full query phrase in the product name.
+    const queryLower = cleanQuery.toLowerCase();
+    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
+    const vecResults = (!vectorError && vectorData && vectorData.length > 0) ? vectorData : [];
+    const kwResults = (keywordRes.data && keywordRes.data.length > 0) ? keywordRes.data : [];
+
+    // Check if any keyword results contain ALL query words in their name (exact match)
+    const exactMatches = kwResults.filter(p => {
+      const nameLower = (p.name || '').toLowerCase();
+      return queryWords.every(w => nameLower.includes(w));
+    });
+
+    let data;
+    if (exactMatches.length > 0) {
+      // Keyword found exact name matches — prefer these, then fill with vector
+      const exactIds = new Set(exactMatches.map(p => p.id));
+      const extraVec = vecResults.filter(p => !exactIds.has(p.id));
+      data = [...exactMatches, ...extraVec].slice(0, 10);
+      console.log(`[fast-search] exact-name match: ${exactMatches.length} (+ ${extraVec.length} vector fill)`);
+    } else if (vecResults.length > 0) {
+      data = vecResults;
+    } else if (kwResults.length > 0) {
+      data = kwResults;
+    } else {
+      data = null;
+    }
 
     if (!data || data.length === 0) {
       console.log('[fast-search] No results from vector or keyword, falling through');
@@ -116,7 +145,7 @@ async function fastProductSearch(query, session) {
 
     const displayed = Math.min(results.length, 3);
     const response =
-      `Found ${displayed} product(s) for "${query}":\n\n` +
+      `Found ${displayed} product(s) for "${cleanQuery}":\n\n` +
       lines.join('\n\n') +
       '\n\nReply with a product code to order, or ask me anything!';
 
@@ -171,9 +200,11 @@ function checkGuardrail(messageText) {
 
   const VEHICLE_KEYWORDS = /\b(part|parts|spare|filter|brake|clutch|engine|oil|pump|bearing|belt|gasket|valve|sensor|shock|absorber|battery|tyre|tire|wheel|axle|gear|transmission|alternator|radiator|piston|ring|seal|bush|pin|rod|cam|shaft|pad|disc|rotor|drum|hose|pipe|wire|relay|fuse|switch|lamp|light|horn|mirror|wiper|seat|door|lock|key|handle|bumper|bonnet|hood|boot|trunk|glass|windshield|carpet|mat|vehicle|car|truck|jeep|bolero|scorpio|xuv|thar|ertiga|swift|alto|maruti|mahindra|tata|hyundai|toyota|honda|ford|suzuki|bajaj|tvs|hero|motorcycle|bike|auto|workshop|garage|mechanic|order|cart|price|stock|delivery|oem|product|code|brand|bosch|denso|ngk|lucas|skf|minda|wago|search|buy|add|confirm|place|check|status|history|invoice)\b/i;
 
-  const GENERAL_QUERY_PATTERN = /^(what\s+is|what's|who\s+is|who's|how\s+(much|many|do|does|to|is)|where\s+is|when\s+is|why\s+is|calculate|tell\s+me|explain|define|give\s+me|list\s+of|can\s+you\s+tell|do\s+you\s+know|[\d\s+\-*/^()=]+[+\-*/]=?\s*\??\s*$)/i;
+  // Product-request prefixes ("do you have", "can I get") are NOT general queries
+  const GENERAL_QUERY_PATTERN = /^(what\s+is|what's|who\s+is|who's|how\s+(much|many|do|does|to|is)|where\s+is|when\s+is|why\s+is|calculate|tell\s+me|explain|define|list\s+of|can\s+you\s+tell|do\s+you\s+know|[\d\s+\-*/^()=]+[+\-*/]=?\s*\??\s*$)/i;
+  const PRODUCT_REQUEST_PREFIX = /^(do you have|have you got|do you sell|do you stock|can i get|can i have|can i buy|can you show|can you find|show me|give me|get me|find me|i want|i need|looking for)/i;
 
-  if (!ALWAYS_ALLOW.test(msg) && GENERAL_QUERY_PATTERN.test(msg) && !VEHICLE_KEYWORDS.test(msg)) {
+  if (!ALWAYS_ALLOW.test(msg) && !PRODUCT_REQUEST_PREFIX.test(msg) && GENERAL_QUERY_PATTERN.test(msg) && !VEHICLE_KEYWORDS.test(msg)) {
     console.log('[guardrail] Off-topic message blocked:', msg.substring(0, 80));
     return `I'm ViJJI, your vehicle parts assistant. I can only help with spare parts, orders, and workshop searches. For anything else, please contact us at ${require('../shared').CUSTOMER_CARE_PHONE}.`;
   }

@@ -46,7 +46,7 @@ const { callOllama, routeMessage, fastProductSearch } = require('../ai/aiRouter'
 const { handleConversation, handleConversationStream } = require('../ai/handleConversation');
 const { getEmbedding } = require('../db/embeddingService');
 const { supabase } = require('../shared');
-const { isSimpleProductQuery } = require('../ai/classifier');
+const { isSimpleProductQuery, stripPrefix } = require('../ai/classifier');
 
 const emptySession = { context: {}, phoneNumber: '9851069717' };
 const nepalSession = {
@@ -112,6 +112,69 @@ describe('callOllama()', () => {
 });
 
 // ─────────────────────────────────────────────
+describe('stripPrefix()', () => {
+  test('strips "do you have" prefix', () => {
+    expect(stripPrefix('do you have water pump')).toBe('water pump');
+  });
+
+  test('strips "can I get" prefix', () => {
+    expect(stripPrefix('can I get brake pads')).toBe('brake pads');
+  });
+
+  test('strips "show me" prefix', () => {
+    expect(stripPrefix('show me oil filter')).toBe('oil filter');
+  });
+
+  test('strips "I need" prefix', () => {
+    expect(stripPrefix('I need clutch plate')).toBe('clutch plate');
+  });
+
+  test('strips "give me" prefix', () => {
+    expect(stripPrefix('give me water pump bolero')).toBe('water pump bolero');
+  });
+
+  test('strips "looking for" prefix', () => {
+    expect(stripPrefix('looking for brake pad')).toBe('brake pad');
+  });
+
+  test('strips "can you show" prefix', () => {
+    expect(stripPrefix('can you show brake pad')).toBe('brake pad');
+  });
+
+  test('strips "make me see" prefix', () => {
+    expect(stripPrefix('make me see filters')).toBe('filters');
+  });
+
+  test('strips trailing question mark', () => {
+    expect(stripPrefix('water pump?')).toBe('water pump');
+  });
+
+  test('strips prefix + trailing punctuation together', () => {
+    expect(stripPrefix('do you have water pump?')).toBe('water pump');
+  });
+
+  test('no prefix → returns original (minus trailing punctuation)', () => {
+    expect(stripPrefix('brake pad')).toBe('brake pad');
+  });
+
+  test('strips "i am looking for" prefix', () => {
+    expect(stripPrefix('i am looking for gasket')).toBe('gasket');
+  });
+
+  test('strips "please find" prefix', () => {
+    expect(stripPrefix('please find clutch bearing')).toBe('clutch bearing');
+  });
+
+  test('strips "do you sell" prefix', () => {
+    expect(stripPrefix('do you sell filters')).toBe('filters');
+  });
+
+  test('strips "can i buy" prefix', () => {
+    expect(stripPrefix('can i buy brake pad')).toBe('brake pad');
+  });
+});
+
+// ─────────────────────────────────────────────
 describe('isSimpleProductQuery()', () => {
   test('"water pump bolero" → true', () => {
     expect(isSimpleProductQuery('water pump bolero')).toBe(true);
@@ -137,12 +200,16 @@ describe('isSimpleProductQuery()', () => {
     expect(isSimpleProductQuery('hello')).toBe(false);
   });
 
-  test('"water pump?" → false (question mark)', () => {
-    expect(isSimpleProductQuery('water pump?')).toBe(false);
+  test('"water pump?" → true (question mark stripped, product keyword found)', () => {
+    expect(isSimpleProductQuery('water pump?')).toBe(true);
   });
 
-  test('"I need brake pads for my Bolero truck" → false (7 words)', () => {
-    expect(isSimpleProductQuery('I need brake pads for my Bolero truck')).toBe(false);
+  test('"I need brake pads for my Bolero truck" → true (8 words, within limit)', () => {
+    expect(isSimpleProductQuery('I need brake pads for my Bolero truck')).toBe(true);
+  });
+
+  test('"I really need some good brake pads for my Bolero truck" → false (11 words, over limit)', () => {
+    expect(isSimpleProductQuery('I really need some good brake pads for my Bolero truck')).toBe(false);
   });
 
   test('"WP0071N" → false (product code → Claude for cart ops)', () => {
@@ -151,6 +218,59 @@ describe('isSimpleProductQuery()', () => {
 
   test('Devanagari "वाटर पंप" → false (handled by qwen path)', () => {
     expect(isSimpleProductQuery('वाटर पंप')).toBe(false);
+  });
+
+  // ── Conversational prefix tests ──
+  test('"do you have water pump" → true', () => {
+    expect(isSimpleProductQuery('do you have water pump')).toBe(true);
+  });
+
+  test('"do you have water pump?" → true', () => {
+    expect(isSimpleProductQuery('do you have water pump?')).toBe(true);
+  });
+
+  test('"can I get brake pads" → true', () => {
+    expect(isSimpleProductQuery('can I get brake pads')).toBe(true);
+  });
+
+  test('"can you show me filter" → true', () => {
+    expect(isSimpleProductQuery('can you show me filter')).toBe(true);
+  });
+
+  test('"show me oil filter" → true', () => {
+    expect(isSimpleProductQuery('show me oil filter')).toBe(true);
+  });
+
+  test('"give me clutch plate" → true', () => {
+    expect(isSimpleProductQuery('give me clutch plate')).toBe(true);
+  });
+
+  test('"I want brake pad" → true', () => {
+    expect(isSimpleProductQuery('I want brake pad')).toBe(true);
+  });
+
+  test('"find me gasket" → true', () => {
+    expect(isSimpleProductQuery('find me gasket')).toBe(true);
+  });
+
+  test('"looking for bearing" → true', () => {
+    expect(isSimpleProductQuery('looking for bearing')).toBe(true);
+  });
+
+  test('"do you sell filters?" → true', () => {
+    expect(isSimpleProductQuery('do you sell filters?')).toBe(true);
+  });
+
+  test('"can i buy brake pad?" → true', () => {
+    expect(isSimpleProductQuery('can i buy brake pad?')).toBe(true);
+  });
+
+  test('"make me see filters" → true', () => {
+    expect(isSimpleProductQuery('make me see filters')).toBe(true);
+  });
+
+  test('"do you have something random" → false (no product keyword after strip)', () => {
+    expect(isSimpleProductQuery('do you have something random')).toBe(false);
   });
 });
 
@@ -271,7 +391,8 @@ describe('routeMessage()', () => {
       updatedContext: emptySession.context
     });
 
-    const result = await routeMessage('I need brake pads for my Bolero', emptySession, []);
+    // "compare" triggers FAST_PATH_BLOCKERS → falls through to Claude
+    const result = await routeMessage('compare brake pads for my Bolero truck model', emptySession, []);
     expect(handleConversation).toHaveBeenCalled();
     expect(result.response).toBe('Here are the brake pads...');
     expect(result.model).toBeDefined();
@@ -337,6 +458,93 @@ describe('routeMessage()', () => {
     expect(handleConversation).toHaveBeenCalled();
   });
 
+  test('"do you have water pump" → fast path (prefix stripped)', async () => {
+    const session = { context: {}, phoneNumber: '+977-9851069717', customer: { phone: '+977-9851069717' } };
+    const mockProduct = {
+      id: 'uuid-2', name: 'Water Pump Assembly', product_code: 'WP001',
+      oem_number: 'OEM-WP1', mrp_inr: 500, mrp_npr: 800,
+      stock_quantity: 10, vehicle_model: 'Bolero', brand: 'Mahindra'
+    };
+    getEmbedding.mockResolvedValue([0.1, 0.2]);
+    supabase.rpc.mockResolvedValue({ data: [mockProduct], error: null });
+
+    const result = await routeMessage('do you have water pump', session, []);
+    expect(result.model).toBe('fast-search');
+    expect(result.response).toContain('Water Pump Assembly');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  test('"do you have water pump?" → fast path (prefix + ? stripped)', async () => {
+    const session = { context: {}, phoneNumber: '+977-9851069717', customer: { phone: '+977-9851069717' } };
+    const mockProduct = {
+      id: 'uuid-2', name: 'Water Pump Assembly', product_code: 'WP001',
+      mrp_inr: 500, mrp_npr: 800, stock_quantity: 10, brand: 'Mahindra'
+    };
+    getEmbedding.mockResolvedValue([0.1, 0.2]);
+    supabase.rpc.mockResolvedValue({ data: [mockProduct], error: null });
+
+    const result = await routeMessage('do you have water pump?', session, []);
+    expect(result.model).toBe('fast-search');
+    expect(result.response).toContain('Water Pump Assembly');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  test('"can I get brake pads" → fast path', async () => {
+    const session = { context: {}, phoneNumber: '+977-9851069717', customer: { phone: '+977-9851069717' } };
+    const mockProduct = {
+      id: 'uuid-3', name: 'Brake Pad Set', product_code: 'BP001',
+      mrp_inr: 400, mrp_npr: 650, stock_quantity: 5, brand: 'Bosch'
+    };
+    getEmbedding.mockResolvedValue([0.1]);
+    supabase.rpc.mockResolvedValue({ data: [mockProduct], error: null });
+
+    const result = await routeMessage('can I get brake pads', session, []);
+    expect(result.model).toBe('fast-search');
+    expect(result.response).toContain('Brake Pad Set');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  test('"show me oil filter" → fast path', async () => {
+    const session = { context: {}, phoneNumber: '+977-9851069717', customer: { phone: '+977-9851069717' } };
+    const mockProduct = {
+      id: 'uuid-4', name: 'Oil Filter', product_code: 'OF001',
+      mrp_inr: 200, mrp_npr: 320, stock_quantity: 15, brand: 'Bosch'
+    };
+    getEmbedding.mockResolvedValue([0.1]);
+    supabase.rpc.mockResolvedValue({ data: [mockProduct], error: null });
+
+    const result = await routeMessage('show me oil filter', session, []);
+    expect(result.model).toBe('fast-search');
+    expect(result.response).toContain('Oil Filter');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  test('"give me clutch plate" → fast path', async () => {
+    const session = { context: {}, phoneNumber: '+977-9851069717', customer: { phone: '+977-9851069717' } };
+    const mockProduct = {
+      id: 'uuid-5', name: 'Clutch Plate', product_code: 'CP001',
+      mrp_inr: 1200, mrp_npr: 1920, stock_quantity: 3, brand: 'Valeo'
+    };
+    getEmbedding.mockResolvedValue([0.1]);
+    supabase.rpc.mockResolvedValue({ data: [mockProduct], error: null });
+
+    const result = await routeMessage('give me clutch plate', session, []);
+    expect(result.model).toBe('fast-search');
+    expect(result.response).toContain('Clutch Plate');
+    expect(handleConversation).not.toHaveBeenCalled();
+  });
+
+  test('"do you have something random" → not fast path (no product keyword)', async () => {
+    handleConversation.mockResolvedValue({
+      response: 'I can help with vehicle parts.',
+      updatedContext: emptySession.context
+    });
+
+    const result = await routeMessage('do you have something random', emptySession, []);
+    // Not a product query, routes to Claude
+    expect(result.model).not.toBe('fast-search');
+  });
+
   test('order status query → skips fast path, routes to Claude', async () => {
     handleConversation.mockResolvedValue({
       response: 'Your order ORD-123 is confirmed.',
@@ -360,10 +568,11 @@ describe('routeMessage() streaming', () => {
     });
 
     const onChunk = jest.fn();
-    const result = await routeMessage('I need brake pads for my Bolero', emptySession, [], { stream: true, onChunk });
+    // Use a query that hits Claude (compare = FAST_PATH_BLOCKER)
+    const result = await routeMessage('compare brake pads for Bolero', emptySession, [], { stream: true, onChunk });
 
     expect(handleConversationStream).toHaveBeenCalledWith(
-      'I need brake pads for my Bolero', emptySession, [], onChunk
+      'compare brake pads for Bolero', emptySession, [], onChunk
     );
     expect(handleConversation).not.toHaveBeenCalled();
     expect(result.response).toBe('Streamed response');
@@ -376,7 +585,8 @@ describe('routeMessage() streaming', () => {
       updatedContext: emptySession.context
     });
 
-    const result = await routeMessage('I need brake pads for my Bolero', emptySession, []);
+    // Use a query that hits Claude (compare = FAST_PATH_BLOCKER)
+    const result = await routeMessage('compare brake pads for Bolero', emptySession, []);
     expect(handleConversation).toHaveBeenCalled();
     expect(handleConversationStream).not.toHaveBeenCalled();
     expect(result.response).toBe('Regular response');

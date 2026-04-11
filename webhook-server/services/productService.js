@@ -200,7 +200,34 @@ async function searchProducts(params = {}, session = null) {
     const [vectorResults, keywordResults] = await Promise.all([vectorPromise, keywordPromise]);
     console.log('[PERF] search.parallel:', (Date.now() - _tParallel) + 'ms');
 
-    // Prefer vector results
+    // ── Smart merge: exact name matches beat vector similarity ──
+    // Vector for "water pump" can return fuel/oil pumps (semantically close).
+    // Keyword finds actual WATER PUMP products. Prefer keyword exact matches.
+    const searchPhrase = (keyword || queryParts || '').toLowerCase();
+    const searchWords = searchPhrase.split(/\s+/).filter(w => w.length > 2);
+
+    // Check if keyword results contain ALL search words in product name
+    const exactNameMatches = keywordResults.filter(p => {
+      const nameLower = (p.name || '').toLowerCase();
+      return searchWords.length > 0 && searchWords.every(w => nameLower.includes(w));
+    });
+
+    if (exactNameMatches.length > 0) {
+      // Exact name matches found — merge with vector (exact first, then vector fill)
+      const exactIds = new Set(exactNameMatches.map(p => p.id));
+      const extraVector = vectorResults.filter(p => !exactIds.has(p.id));
+      let merged = [...exactNameMatches, ...extraVector];
+      if (applyWorkshopSegmentFilter) {
+        merged = merged.filter(p => p.segment === session?.workshopSegment || p.segment === 'MUV/PC');
+      }
+      if (merged.length > 0) {
+        console.log(`[search] Found via: exact-name(${exactNameMatches.length}) + vector-fill(${extraVector.length}) → ${merged.length} results`);
+        console.log('[PERF] search.total:', (Date.now() - _tSearch) + 'ms');
+        return applyRankingAndDedup(merged);
+      }
+    }
+
+    // No exact name matches — fall back to vector-first, then keyword
     if (vectorResults.length > 0) {
       let filtered = [...vectorResults];
       if (applyWorkshopSegmentFilter) {
