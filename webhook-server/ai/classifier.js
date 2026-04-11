@@ -19,7 +19,7 @@ const FAST_PATH_BLOCKERS = /\b(order|cart|status|problem|fix|repair|diagnos|issu
 
 // Common conversational prefixes that precede product requests.
 // Stripped before fast-path matching AND before sending to vector search.
-const CONVERSATIONAL_PREFIX = /^(do you have|have you got|do you sell|do you stock|do you carry|can i get|can i have|can i see|can i buy|can i order|can you show|can you find|can you get|can you search|could you show|could you find|i want|i need|i am looking for|i'm looking for|looking for|show me|give me|get me|find me|search for|look for|look up|please show|please find|please get|please search|pls show|pls find|let me see|make me see|display|mai chahiye|mujhe chahiye|chahiye|dedo|de do|dikhao|dikha do|batao|bata do)\s+/i;
+const CONVERSATIONAL_PREFIX = /^(do you have|have you got|do you sell|do you stock|do you carry|can i get|can i have|can i see|can i buy|can i order|can you show me|can you show|can you find me|can you find|can you get me|can you get|can you search|could you show me|could you show|could you find me|could you find|i want|i need|i am looking for|i'm looking for|looking for|show me|give me|get me|find me|search for|look for|look up|please show me|please show|please find me|please find|please get me|please get|please search|pls show|pls find|let me see|make me see|display|mai chahiye|mujhe chahiye|chahiye|dedo|de do|dikhao|dikha do|batao|bata do)\s+/i;
 
 // Strip conversational prefix from a query, returning the product-focused part
 function stripPrefix(text) {
