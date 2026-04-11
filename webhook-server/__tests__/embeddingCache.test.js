@@ -1,8 +1,17 @@
 'use strict';
 
-// Mock fetch globally before requiring the module
-const mockFetch = jest.fn();
-global.fetch = mockFetch;
+// Mock shared.js before requiring embeddingService (needs httpsAgent)
+jest.mock('../shared', () => ({
+  httpsAgent: {},
+  supabase: { from: jest.fn(() => ({ insert: jest.fn(() => Promise.resolve({ error: null })) })) },
+  CUSTOMER_CARE_PHONE: '+977-9851069717'
+}));
+
+// Mock axios to intercept NIM API calls
+const mockAxiosPost = jest.fn();
+jest.mock('axios', () => ({
+  create: () => ({ post: mockAxiosPost })
+}));
 
 const { getEmbedding, embCache } = require('../db/embeddingService');
 
@@ -10,10 +19,9 @@ const FAKE_VECTOR = [0.1, 0.2, 0.3];
 
 function mockNIMResponse(embeddings) {
   return {
-    ok: true,
-    json: () => Promise.resolve({
+    data: {
       data: embeddings.map((e, i) => ({ index: i, embedding: e }))
-    })
+    }
   };
 }
 
@@ -21,39 +29,39 @@ describe('getEmbedding() cache', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     embCache.clear();
-    mockFetch.mockResolvedValue(mockNIMResponse([FAKE_VECTOR]));
+    mockAxiosPost.mockResolvedValue(mockNIMResponse([FAKE_VECTOR]));
   });
 
   test('first call → cache miss, hits NIM', async () => {
     const result = await getEmbedding('brake pad');
 
     expect(result).toEqual(FAKE_VECTOR);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockAxiosPost).toHaveBeenCalledTimes(1);
     expect(embCache.size).toBe(1);
   });
 
   test('second call with same query → cache hit, no NIM call', async () => {
     await getEmbedding('brake pad');
-    mockFetch.mockClear();
+    mockAxiosPost.mockClear();
 
     const result = await getEmbedding('brake pad');
 
     expect(result).toEqual(FAKE_VECTOR);
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
   test('array input cached as joined key', async () => {
     const vectors = [[0.1, 0.2], [0.3, 0.4]];
-    mockFetch.mockResolvedValue(mockNIMResponse(vectors));
+    mockAxiosPost.mockResolvedValue(mockNIMResponse(vectors));
 
     const result1 = await getEmbedding(['brake pad', 'oil filter']);
     expect(result1).toEqual(vectors);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockAxiosPost).toHaveBeenCalledTimes(1);
 
-    mockFetch.mockClear();
+    mockAxiosPost.mockClear();
     const result2 = await getEmbedding(['brake pad', 'oil filter']);
     expect(result2).toEqual(vectors);
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockAxiosPost).not.toHaveBeenCalled();
   });
 
   test('1001 unique queries → oldest entry evicted (LRU)', async () => {
@@ -80,6 +88,6 @@ describe('getEmbedding() cache', () => {
     const result = await getEmbedding('brake pad');
 
     expect(result).toEqual(FAKE_VECTOR);
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockAxiosPost).toHaveBeenCalledTimes(1);
   });
 });

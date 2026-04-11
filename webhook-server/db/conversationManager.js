@@ -215,6 +215,13 @@ async function getOrCreateSession(phoneNumber) {
     const cached = sessionCacheGet(phoneNumber);
     if (cached) {
       console.log(`[session-cache] hit for ${normalized}`);
+      // Skip history re-fetch if last cache write was < 30s ago (rapid-fire messages).
+      // The cache entry already has history from the previous call.
+      const cacheEntry = sessionCache.get(normalizePhone(phoneNumber));
+      if (cacheEntry && (Date.now() - cacheEntry.ts) < 30000) {
+        console.log(`[session-cache] fresh (<30s), skipping history re-fetch`);
+        return cached;
+      }
       // Refresh history from DB (lightweight single query)
       const { data: recentMessages } = await supabase
         .from('conversation_logs')
@@ -226,9 +233,11 @@ async function getOrCreateSession(phoneNumber) {
       return cached;
     }
 
-    // Steps 1, 1b, 2: Run customer lookup, workshop lookup, and session lookup in parallel
+    // Steps 1, 1b, 2: Run customer, workshop, session, AND history lookups all in parallel.
+    // History query runs speculatively — if no session exists, the result is discarded.
+    // This saves ~100-300ms by not waiting for session lookup before fetching history.
     const sessionVariants = [...new Set([phoneNumber, normalized])];
-    const [customerRes, workshop, sessionRes] = await Promise.all([
+    const [customerRes, workshop, sessionRes, historyRes] = await Promise.all([
       findCustomerByPhone(phoneNumber),
       findWorkshopByPhone(normalized),
       supabase
@@ -238,11 +247,20 @@ async function getOrCreateSession(phoneNumber) {
         .eq('is_active', true)
         .order('id', { ascending: false })
         .limit(1)
-        .single()
+        .single(),
+      // Speculative history fetch — uses session's phone to get recent logs.
+      // If the session doesn't exist, this returns empty (harmless).
+      supabase
+        .from('conversation_logs')
+        .select('message_type, message_text, timestamp')
+        .in('phone_number', sessionVariants)
+        .order('timestamp', { ascending: false })
+        .limit(10)
     ]);
 
     const { customer } = customerRes;
     const { data: existingSession, error: sessionError } = sessionRes;
+    const historyData = historyRes.data || [];
 
     if (sessionError && sessionError.code !== 'PGRST116') {
       throw sessionError;
@@ -270,16 +288,9 @@ async function getOrCreateSession(phoneNumber) {
         }
       }
 
-      // Load last 10 messages for context — returned as conversationHistory
-      // so callers don't need a separate getConversationHistory() call.
-      const { data: recentMessages } = await supabase
-        .from('conversation_logs')
-        .select('message_type, message_text, timestamp')
-        .eq('session_id', existingSession.id)
-        .order('timestamp', { ascending: false })
-        .limit(10);
-      const conversationHistory = recentMessages ? recentMessages.reverse() : [];
-      console.log(`[history] source: cache (${conversationHistory.length} msgs)`);
+      // History was already fetched in parallel above — use it directly
+      const conversationHistory = historyData ? historyData.reverse() : [];
+      console.log(`[history] source: parallel (${conversationHistory.length} msgs)`);
       const sessionResult = {
         sessionId: existingSession.id,
         phoneNumber: phoneNumber,

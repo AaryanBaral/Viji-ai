@@ -244,11 +244,16 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
 
   const llmModel = CONFIG.models[CONFIG.provider] || CONFIG.provider;
 
+  // WhatsApp messages use non-streaming path (no onChunk) — use shorter max_tokens
+  // for faster LLM generation. Web/app streaming uses full 1024.
+  const isWhatsApp = !(stream && onChunk);
+  const llmMaxTokens = isWhatsApp ? 512 : undefined;
+
   if (classification.route === 'claude') {
     aiStats.claude++;
     const handler = (stream && onChunk)
       ? handleConversationStream(messageText, session, conversationHistory, onChunk)
-      : handleConversation(messageText, session, conversationHistory);
+      : handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
     const result = await handler;
     console.log('[router] LLM response in', (Date.now() - start) + 'ms');
     return { ...result, model: llmModel };
@@ -259,7 +264,7 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
     aiStats.claude++;
     const handler = (stream && onChunk)
       ? handleConversationStream(messageText, session, conversationHistory, onChunk)
-      : handleConversation(messageText, session, conversationHistory);
+      : handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
     const result = await handler;
     console.log('[router] LLM response in (ollama disabled)', (Date.now() - start) + 'ms');
     return { ...result, model: llmModel };
@@ -276,7 +281,7 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
     console.warn('[aiRouter] Ollama failed, falling back to Claude:', error.message);
     aiStats.fallbacks++;
     aiStats.claude++;
-    const result = await handleConversation(messageText, session, conversationHistory);
+    const result = await handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
     console.log('[router] Claude response in (ollama fallback)', (Date.now() - start) + 'ms');
     return result;
   }

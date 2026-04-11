@@ -1,3 +1,17 @@
+const axios = require('axios');
+const { httpsAgent } = require('../shared');
+
+// Reuse TCP+TLS connections for NIM API calls
+const nimClient = axios.create({
+  httpsAgent,
+  baseURL: 'https://integrate.api.nvidia.com',
+  timeout: 10000,
+  headers: {
+    'Authorization': `Bearer ${process.env.NVIDIA_API_KEY}`,
+    'Content-Type': 'application/json'
+  }
+});
+
 // In-memory LRU cache for embedding vectors.
 // 1000 entries max, 1-hour TTL. Resets on server restart (acceptable).
 const EMB_CACHE_MAX = 1000;
@@ -42,22 +56,12 @@ async function getEmbedding(text) {
     }
 
     const _t0 = Date.now();
-    const response = await fetch('https://integrate.api.nvidia.com/v1/embeddings', {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${process.env.NVIDIA_API_KEY}`,
-            'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-            model: 'nvidia/nv-embedqa-e5-v5',
-            input: Array.isArray(text) ? text : [text],
-            input_type: 'query'
-        })
+    const response = await nimClient.post('/v1/embeddings', {
+      model: 'nvidia/nv-embedqa-e5-v5',
+      input: Array.isArray(text) ? text : [text],
+      input_type: 'query'
     });
-    if (!response.ok) {
-        throw new Error(`NIM embedding error: ${response.status}`);
-    }
-    const data = await response.json();
+    const data = response.data;
     try { console.log('[PERF] embedding:', (Date.now() - _t0) + 'ms'); } catch(e) {}
 
     const result = Array.isArray(text) ? data.data.map(d => d.embedding) : data.data[0].embedding;

@@ -3,7 +3,7 @@
 // Claude message format is canonical for all internal message history.
 
 const Anthropic = require('@anthropic-ai/sdk');
-const { supabase } = require('../shared');
+const { supabase, httpsAgent } = require('../shared');
 
 // ─────────────────────────────────────────────────────────────
 // CONFIGURATION
@@ -119,11 +119,11 @@ function calculateCost(provider, inputTokens, outputTokens) {
 // ─────────────────────────────────────────────────────────────
 const anthropic = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
 
-async function callClaude(systemPrompt, messages, tools) {
+async function callClaude(systemPrompt, messages, tools, { maxTokens } = {}) {
   const start = Date.now();
   const response = await anthropic.messages.create({
     model: CONFIG.models.claude,
-    max_tokens: 1024,
+    max_tokens: maxTokens || 1024,
     stream: false,
     system: systemPrompt,
     tools,
@@ -280,9 +280,9 @@ async function callOpenAICompat(provider, systemPrompt, messages, claudeTools) {
 // ─────────────────────────────────────────────────────────────
 // INTERNAL DISPATCH
 // ─────────────────────────────────────────────────────────────
-async function dispatchToProvider(provider, systemPrompt, messages, tools) {
+async function dispatchToProvider(provider, systemPrompt, messages, tools, opts = {}) {
   if (provider === 'claude') {
-    return callClaude(systemPrompt, messages, tools);
+    return callClaude(systemPrompt, messages, tools, opts);
   }
   return callOpenAICompat(provider, systemPrompt, messages, tools);
 }
@@ -342,21 +342,21 @@ async function logShadowComparison({ primaryProvider, shadowProvider, primaryTex
 // { text, toolCalls, usage: {inputTokens, outputTokens}, stopReason, rawContent, meta }
 // rawContent is always in Claude canonical format for message history.
 // ─────────────────────────────────────────────────────────────
-async function callLLM(systemPrompt, messages, tools, { sessionId, phoneNumber } = {}) {
+async function callLLM(systemPrompt, messages, tools, { sessionId, phoneNumber, maxTokens } = {}) {
   const primaryProvider = CONFIG.provider;
   const originalProvider = primaryProvider;
   let normalized;
   let wasFallback = false;
 
   try {
-    normalized = await dispatchToProvider(primaryProvider, systemPrompt, messages, tools);
+    normalized = await dispatchToProvider(primaryProvider, systemPrompt, messages, tools, { maxTokens });
   } catch (primaryErr) {
     console.error(`❌ Primary LLM provider (${primaryProvider}) failed:`, primaryErr.message);
 
     if (CONFIG.fallback && CONFIG.fallback !== primaryProvider) {
       console.log(`🔄 Falling back to ${CONFIG.fallback}...`);
       try {
-        normalized = await dispatchToProvider(CONFIG.fallback, systemPrompt, messages, tools);
+        normalized = await dispatchToProvider(CONFIG.fallback, systemPrompt, messages, tools, { maxTokens });
         wasFallback = true;
         normalized.meta.provider = CONFIG.fallback;
       } catch (fallbackErr) {
@@ -414,11 +414,11 @@ async function callLLM(systemPrompt, messages, tools, { sessionId, phoneNumber }
 // Uses anthropic.messages.stream() — calls onTextDelta for each
 // text chunk, then returns the same normalized result as callClaude.
 // ─────────────────────────────────────────────────────────────
-async function callClaudeStream(systemPrompt, messages, tools, onTextDelta) {
+async function callClaudeStream(systemPrompt, messages, tools, { maxTokens } = {}, onTextDelta) {
   const start = Date.now();
   const stream = anthropic.messages.stream({
     model: CONFIG.models.claude,
-    max_tokens: 1024,
+    max_tokens: maxTokens || 1024,
     system: systemPrompt,
     tools,
     messages
@@ -460,7 +460,7 @@ async function callClaudeStream(systemPrompt, messages, tools, onTextDelta) {
 // text chunk as it arrives. Non-Claude providers fall back to
 // non-streaming and emit the full text as a single callback.
 // ─────────────────────────────────────────────────────────────
-async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNumber } = {}, onTextDelta) {
+async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNumber, maxTokens } = {}, onTextDelta) {
   const primaryProvider = CONFIG.provider;
   const originalProvider = primaryProvider;
   let normalized;
@@ -468,7 +468,7 @@ async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNu
 
   try {
     if (primaryProvider === 'claude') {
-      normalized = await callClaudeStream(systemPrompt, messages, tools, onTextDelta);
+      normalized = await callClaudeStream(systemPrompt, messages, tools, { maxTokens }, onTextDelta);
     } else {
       normalized = await callOpenAICompat(primaryProvider, systemPrompt, messages, tools);
       if (onTextDelta && normalized.text) onTextDelta(normalized.text);

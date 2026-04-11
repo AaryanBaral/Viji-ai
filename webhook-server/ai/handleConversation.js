@@ -178,7 +178,7 @@ function logToolSummary(session, summary) {
   });
 }
 
-async function handleConversation(userMessage, session, conversationHistory = []) {
+async function handleConversation(userMessage, session, conversationHistory = [], { maxTokens } = {}) {
   let imageResult = null; // Track image fetch result for WhatsApp delivery
   try {
     // For employee sessions: resolve the customer they're acting for
@@ -224,11 +224,10 @@ async function handleConversation(userMessage, session, conversationHistory = []
       messages = [{ role: 'user', content: userMessage }];
     }
 
+    const llmOpts = { sessionId: session.sessionId, phoneNumber: session.phoneNumber, maxTokens };
+
     _llmCall++;
-    let normalized = await callLLM(systemPrompt, messages, claudeTools, {
-      sessionId: session.sessionId,
-      phoneNumber: session.phoneNumber
-    });
+    let normalized = await callLLM(systemPrompt, messages, claudeTools, llmOpts);
     try { console.log(`[PERF] llm#${_llmCall}: ${normalized.meta.latencyMs}ms (model=${normalized.meta.provider}, in=${normalized.usage.inputTokens}, out=${normalized.usage.outputTokens})`); } catch(e) {}
 
     // Accumulate token usage across all LLM calls in this conversation turn
@@ -240,34 +239,31 @@ async function handleConversation(userMessage, session, conversationHistory = []
     while (normalized.stopReason === 'tool_use') {
       console.log(`🔧 LLM wants to use ${normalized.toolCalls.length} tool(s)`);
 
-      const toolResults = [];
-      for (const toolCall of normalized.toolCalls) {
+      // Execute all tool calls in parallel when multiple are requested (saves ~200-500ms)
+      const _tTools = Date.now();
+      const toolResultsRaw = await Promise.all(normalized.toolCalls.map(async (toolCall) => {
         const _tTool = Date.now();
         const result = await processToolCall(toolCall.name, toolCall.input, session);
         try { console.log(`[PERF] tool(${toolCall.name}): ${Date.now() - _tTool}ms`); } catch(e) {}
+        return { toolCall, result };
+      }));
+      console.log(`[PERF] all tools: ${Date.now() - _tTools}ms`);
 
+      const toolResults = toolResultsRaw.map(({ toolCall, result }) => {
         if (toolCall.name === 'get_product_image' && result.success && result.image_url) {
           imageResult = result;
         }
-
-        toolResults.push({ type: 'tool_result', tool_use_id: toolCall.id, content: JSON.stringify(result) });
-
-        // Log a human-readable summary to conversation_logs (fire-and-forget).
-        // This lets future conversation history loads include product codes,
-        // enabling the LLM to match partial part numbers like "10 N" → "0707DC0010N".
         const summary = summarizeToolResult(toolCall.name, toolCall.input, result);
         logToolSummary(session, summary);
-      }
+        return { type: 'tool_result', tool_use_id: toolCall.id, content: JSON.stringify(result) };
+      });
 
       // rawContent is always in Claude canonical format regardless of provider
       messages.push({ role: 'assistant', content: normalized.rawContent });
       messages.push({ role: 'user', content: toolResults });
 
       _llmCall++;
-      normalized = await callLLM(systemPrompt, messages, claudeTools, {
-        sessionId: session.sessionId,
-        phoneNumber: session.phoneNumber
-      });
+      normalized = await callLLM(systemPrompt, messages, claudeTools, llmOpts);
       try { console.log(`[PERF] llm#${_llmCall}: ${normalized.meta.latencyMs}ms (model=${normalized.meta.provider}, in=${normalized.usage.inputTokens}, out=${normalized.usage.outputTokens})`); } catch(e) {}
       totalInputTokens  += normalized.usage.inputTokens;
       totalOutputTokens += normalized.usage.outputTokens;
@@ -374,21 +370,24 @@ async function handleConversationStream(userMessage, session, conversationHistor
     while (normalized.stopReason === 'tool_use') {
       console.log(`🔧 LLM wants to use ${normalized.toolCalls.length} tool(s) (stream)`);
 
-      const toolResults = [];
-      for (const toolCall of normalized.toolCalls) {
+      // Execute all tool calls in parallel
+      const _tTools = Date.now();
+      const toolResultsRaw = await Promise.all(normalized.toolCalls.map(async (toolCall) => {
         const _tTool = Date.now();
         const result = await processToolCall(toolCall.name, toolCall.input, session);
         try { console.log(`[PERF] tool(${toolCall.name}): ${Date.now() - _tTool}ms`); } catch(e) {}
+        return { toolCall, result };
+      }));
+      console.log(`[PERF] all tools (stream): ${Date.now() - _tTools}ms`);
 
+      const toolResults = toolResultsRaw.map(({ toolCall, result }) => {
         if (toolCall.name === 'get_product_image' && result.success && result.image_url) {
           imageResult = result;
         }
-
-        toolResults.push({ type: 'tool_result', tool_use_id: toolCall.id, content: JSON.stringify(result) });
-
         const summary = summarizeToolResult(toolCall.name, toolCall.input, result);
         logToolSummary(session, summary);
-      }
+        return { type: 'tool_result', tool_use_id: toolCall.id, content: JSON.stringify(result) };
+      });
 
       messages.push({ role: 'assistant', content: normalized.rawContent });
       messages.push({ role: 'user', content: toolResults });
