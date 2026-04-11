@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+*.swp
+webhook-server/.profile.d/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Build output
+dist/
+build/

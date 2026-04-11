@@ -1,0 +1,12 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="favicon-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4d8ef7"/>
+      <stop offset="100%" stop-color="#7db4ff"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded square background -->
+  <rect width="512" height="512" rx="108" fill="#0f1117"/>
+  <!-- V lettermark -->
+  <text x="114" y="380" font-family="'DM Sans','Helvetica Neue',Arial,sans-serif" font-size="320" font-weight="700" fill="url(#favicon-grad)">V</text>
+</svg>
