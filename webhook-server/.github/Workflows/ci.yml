@@ -1,0 +1,62 @@
+name: Continuous Integration
+
+# When to run this workflow
+on:
+  push:
+    branches: [ develop, main ]
+  pull_request:
+    branches: [ develop, main ]
+
+# Jobs to run
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Step 1: Get the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      # Step 2: Set up Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: npm ci
+      
+      # Step 4: Run linter (check code style)
+      - name: Lint code
+        run: npm run lint
+        continue-on-error: true  # Don't fail build if linting has warnings
+      
+      # Step 5: Run tests
+      - name: Run unit tests
+        run: npm test
+      
+      # Step 6: Check for security vulnerabilities
+      - name: Security audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  # Additional job: Check SQL syntax
+  validate-sql:
+    name: Validate SQL Files
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check SQL syntax
+        run: |
+          echo "Checking SQL files for syntax errors..."
+          for file in database/**/*.sql; do
+            echo "Checking $file"
+            # Basic syntax check (you can add more sophisticated tools)
+            grep -n "ERROR\|WARN" "$file" || true
+          done

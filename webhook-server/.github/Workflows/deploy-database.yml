@@ -1,0 +1,56 @@
+name: Deploy Database
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'database/**'  # Only run if database files changed
+
+jobs:
+  deploy:
+    name: Deploy to Supabase
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      
+      - name: Determine environment
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=production" >> $GITHUB_OUTPUT
+            echo "supabase_url=${{ secrets.SUPABASE_PROD_URL }}" >> $GITHUB_OUTPUT
+            echo "supabase_key=${{ secrets.SUPABASE_PROD_SERVICE_KEY }}" >> $GITHUB_OUTPUT
+          else
+            echo "environment=staging" >> $GITHUB_OUTPUT
+            echo "supabase_url=${{ secrets.SUPABASE_DEV_URL }}" >> $GITHUB_OUTPUT
+            echo "supabase_key=${{ secrets.SUPABASE_DEV_SERVICE_KEY }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Run migrations
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+        run: |
+          echo "Deploying to ${{ steps.env.outputs.environment }}..."
+          
+          # Link to Supabase project
+          supabase link --project-ref $SUPABASE_PROJECT_ID
+          
+          # Push migrations
+          supabase db push
+          
+          echo "✅ Database deployed successfully to ${{ steps.env.outputs.environment }}"
+      
+      - name: Send notification
+        if: failure()
+        run: |
+          echo "❌ Database deployment FAILED"
+          # Add Slack/email notification here if needed

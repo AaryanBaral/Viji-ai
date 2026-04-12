@@ -1,0 +1,37 @@
+{
+  "name": "webhook-server",
+  "version": "1.0.0",
+  "description": "WhatsApp webhook server for vehicle parts chatbot",
+  "main": "webhook-server/index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "npx jest --forceExit --testPathIgnorePatterns=__tests__/mocks"
+  },
+  "keywords": [
+    "whatsapp",
+    "webhook",
+    "claude",
+    "chatbot"
+  ],
+  "author": "Riddi Karki",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.67.1",
+    "@supabase/supabase-js": "^2.76.1",
+    "axios": "^1.13.6",
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "firebase-admin": "^12.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.20.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  }
+}
