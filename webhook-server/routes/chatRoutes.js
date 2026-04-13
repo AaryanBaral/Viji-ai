@@ -185,7 +185,7 @@ module.exports = function createChatRoutes({ routeMessage, conversationManager }
   router.post('/api/chatbot-test/init', chatAuth, async (req, res) => {
     try {
       const phone = req.body.phoneNumber || req.headers['x-phone-number'];
-      const session = await conversationManager.getOrCreateSession(phone);
+      const session = await conversationManager.getOrCreateSession(phone, { channel: 'web' });
       res.json({
         success: true,
         sessionId: session.sessionId,
@@ -208,7 +208,7 @@ module.exports = function createChatRoutes({ routeMessage, conversationManager }
 
       const phone = phoneNumber || 'web-test';
       const _tSess = Date.now();
-      const session = await conversationManager.getOrCreateSession(phone);
+      const session = await conversationManager.getOrCreateSession(phone, { channel: 'web' });
       try { _tSession = Date.now() - _tSess; } catch(e) {}
       const history = session.conversationHistory;
 
@@ -282,7 +282,7 @@ module.exports = function createChatRoutes({ routeMessage, conversationManager }
       if (!sessionId || !message) return res.status(400).json({ success: false, error: 'sessionId and message are required' });
 
       const phone = phoneNumber || 'web-test';
-      const session = await conversationManager.getOrCreateSession(phone);
+      const session = await conversationManager.getOrCreateSession(phone, { channel: 'web' });
       const history = session.conversationHistory;
 
       // Employee session setup (same as /message)
