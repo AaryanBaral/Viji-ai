@@ -1,0 +1,13 @@
+<svg width="640" height="640" viewBox="0 0 640 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="jji-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4d8ef7"/>
+      <stop offset="100%" stop-color="#7db4ff"/>
+    </linearGradient>
+  </defs>
+  <!-- Dark background -->
+  <rect width="640" height="640" rx="0" fill="#0f1117"/>
+  <!-- Logo centered -->
+  <text x="132" y="348" font-family="'DM Sans','Helvetica Neue',Arial,sans-serif" font-size="96" font-weight="700" fill="#e8eaf0" letter-spacing="-2">Vi</text>
+  <text x="292" y="348" font-family="'DM Sans','Helvetica Neue',Arial,sans-serif" font-size="96" font-weight="700" fill="url(#jji-blue)" letter-spacing="-2">JJI</text>
+</svg>
