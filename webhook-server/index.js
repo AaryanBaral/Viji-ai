@@ -38,7 +38,8 @@ const ALLOWED_ORIGINS = new Set([
   'https://vijji.ai',
   'https://chat.vijji.ai',
   'https://www.vijji.ai',
-  'capacitor://localhost',
+  'capacitor://localhost',,
+  'https://dashboard.vijji.ai/admin',
   'http://localhost:5173',  // Vite dev server
   'http://localhost:5174',  // Vite dev server
   'http://localhost:5175',  // Vite dev server
