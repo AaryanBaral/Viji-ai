@@ -203,10 +203,12 @@ function sessionCacheSet(phone, session) {
 
 /**
  * Get existing session or create new one
- * @param {string} phoneNumber - Customer's WhatsApp number
+ * @param {string} phoneNumber - Customer's phone number
+ * @param {object} [options] - Optional settings
+ * @param {string} [options.channel] - 'whatsapp' or 'web' — stored on session creation
  * @returns {Object} Session data with customer info
  */
-async function getOrCreateSession(phoneNumber) {
+async function getOrCreateSession(phoneNumber, options = {}) {
   try {
     const normalized = normalizePhone(phoneNumber);
     console.log(`📞 Getting session for: ${phoneNumber} (normalized: ${normalized})`);
@@ -270,6 +272,14 @@ async function getOrCreateSession(phoneNumber) {
     if (existingSession) {
       console.log(`✅ Found existing session: ${existingSession.id}`);
 
+      // Backfill channel if not set yet and we know the source
+      if (options.channel && !existingSession.channel) {
+        supabase.from('chatbot_sessions').update({ channel: options.channel })
+          .eq('id', existingSession.id)
+          .then(({ error }) => { if (error) console.warn('⚠️ Channel backfill failed:', error.message); });
+        existingSession.channel = options.channel;
+      }
+
       // Check if session is stale (more than 2 hours since last activity)
       const SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
       if (existingSession.last_activity) {
@@ -309,16 +319,18 @@ async function getOrCreateSession(phoneNumber) {
     }
 
     // Step 4: Create new session — store normalized phone for consistent matching
+    const sessionInsert = {
+      phone_number: normalized,
+      customer_id: customer?.id || null,
+      conversation_state: 'greeting',
+      language: 'en',
+      context: {},
+      is_active: true
+    };
+    if (options.channel) sessionInsert.channel = options.channel;
     const { data: newSession, error: createError } = await supabase
       .from('chatbot_sessions')
-      .insert({
-        phone_number: normalized,
-        customer_id: customer?.id || null,
-        conversation_state: 'greeting',
-        language: 'en',
-        context: {},
-        is_active: true
-      })
+      .insert(sessionInsert)
       .select()
       .single();
 

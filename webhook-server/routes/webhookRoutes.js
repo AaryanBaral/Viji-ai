@@ -232,7 +232,7 @@ module.exports = function createWebhookRoutes({ routeMessage, conversationManage
 
       // Step 1: Run session lookup AND media URL fetch in parallel (saves ~200-400ms)
       const [session, mediaRes] = await Promise.all([
-        conversationManager.getOrCreateSession(phoneNumber),
+        conversationManager.getOrCreateSession(phoneNumber, { channel: 'whatsapp' }),
         axiosKeepAlive.get(
           `https://graph.facebook.com/v22.0/${mediaId}`,
           { headers: { Authorization: 'Bearer ' + process.env.WHATSAPP_API_KEY } }
@@ -309,7 +309,7 @@ module.exports = function createWebhookRoutes({ routeMessage, conversationManage
 
       // Step 1: Run session lookup AND media URL fetch in parallel (saves ~200-400ms)
       const [session, mediaRes] = await Promise.all([
-        conversationManager.getOrCreateSession(phoneNumber),
+        conversationManager.getOrCreateSession(phoneNumber, { channel: 'whatsapp' }),
         axiosKeepAlive.get(
           `https://graph.facebook.com/v22.0/${mediaId}`,
           { headers: { Authorization: 'Bearer ' + process.env.WHATSAPP_API_KEY } }
