@@ -9,7 +9,7 @@ const { supabase, httpsAgent } = require('../shared');
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────
 const CONFIG = {
-  provider: process.env.LLM_PROVIDER || 'claude',
+  provider: process.env.LLM_PROVIDER || 'gemini',
   fallback: process.env.LLM_FALLBACK || null,
   shadowMode: process.env.LLM_SHADOW_MODE === 'true',
   shadowProvider: process.env.LLM_SHADOW_PROVIDER || null,
@@ -196,7 +196,7 @@ function buildClaudeContent(text, toolCalls) {
   return content;
 }
 
-async function callOpenAICompat(provider, systemPrompt, messages, claudeTools) {
+async function callOpenAICompat(provider, systemPrompt, messages, claudeTools, { maxTokens } = {}) {
   const start = Date.now();
   const { url, apiKey, model } = getOpenAICompatConfig(provider);
 
@@ -207,7 +207,7 @@ async function callOpenAICompat(provider, systemPrompt, messages, claudeTools) {
 
   const body = {
     model,
-    max_tokens: 1024,
+    max_tokens: maxTokens || 1024,
     messages: openAIMessages,
     ...(openAITools ? { tools: openAITools, tool_choice: 'auto' } : {})
   };
@@ -284,7 +284,7 @@ async function dispatchToProvider(provider, systemPrompt, messages, tools, opts 
   if (provider === 'claude') {
     return callClaude(systemPrompt, messages, tools, opts);
   }
-  return callOpenAICompat(provider, systemPrompt, messages, tools);
+  return callOpenAICompat(provider, systemPrompt, messages, tools, opts);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -455,10 +455,139 @@ async function callClaudeStream(systemPrompt, messages, tools, { maxTokens } = {
 }
 
 // ─────────────────────────────────────────────────────────────
+// STREAMING OPENAI-COMPATIBLE PROVIDER
+// Uses SSE stream for real-time text deltas (Gemini, OpenAI, Groq)
+// ─────────────────────────────────────────────────────────────
+async function callOpenAICompatStream(provider, systemPrompt, messages, claudeTools, { maxTokens } = {}, onTextDelta) {
+  const start = Date.now();
+  const { url, apiKey, model } = getOpenAICompatConfig(provider);
+
+  const openAIMessages = convertMessagesToOpenAI(messages, systemPrompt);
+  const openAITools = claudeTools && claudeTools.length > 0
+    ? convertToolsToOpenAI(claudeTools)
+    : undefined;
+
+  const body = {
+    model,
+    max_tokens: maxTokens || 1024,
+    messages: openAIMessages,
+    stream: true,
+    ...(openAITools ? { tools: openAITools, tool_choice: 'auto' } : {})
+  };
+
+  const TIMEOUT_MS = 30000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') throw new Error(`[llmGateway] ${provider} stream timed out after ${TIMEOUT_MS / 1000}s`);
+    throw err;
+  }
+  clearTimeout(timeoutId);
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`${provider} API error ${res.status}: ${errText}`);
+  }
+
+  // Parse SSE stream
+  let fullText = '';
+  const toolCallsMap = new Map(); // id → { id, name, arguments }
+  let finishReason = 'stop';
+  let inputTokens = 0, outputTokens = 0;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split('\n');
+    buffer = lines.pop(); // keep incomplete line
+
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = line.slice(6).trim();
+      if (data === '[DONE]') continue;
+
+      try {
+        const chunk = JSON.parse(data);
+        const delta = chunk.choices?.[0]?.delta;
+        const reason = chunk.choices?.[0]?.finish_reason;
+        if (reason) finishReason = reason;
+
+        // Usage in final chunk (some providers include it)
+        if (chunk.usage) {
+          inputTokens = chunk.usage.prompt_tokens || 0;
+          outputTokens = chunk.usage.completion_tokens || 0;
+        }
+
+        if (delta?.content) {
+          fullText += delta.content;
+          if (onTextDelta) onTextDelta(delta.content);
+        }
+
+        // Accumulate tool calls across chunks
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const idx = tc.index ?? 0;
+            if (!toolCallsMap.has(idx)) {
+              toolCallsMap.set(idx, { id: tc.id || `call_${idx}`, name: '', arguments: '' });
+            }
+            const existing = toolCallsMap.get(idx);
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name += tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+          }
+        }
+      } catch (e) {
+        // Skip unparseable SSE lines
+      }
+    }
+  }
+
+  const latencyMs = Date.now() - start;
+
+  const toolCalls = Array.from(toolCallsMap.values()).map(tc => ({
+    id: tc.id,
+    name: tc.name,
+    input: (() => { try { return JSON.parse(tc.arguments); } catch { return {}; } })()
+  }));
+
+  const stopReason = finishReason === 'tool_calls' ? 'tool_use'
+    : finishReason === 'stop' ? 'end_turn'
+    : finishReason || 'end_turn';
+
+  return {
+    text: fullText,
+    toolCalls,
+    usage: { inputTokens, outputTokens },
+    stopReason,
+    rawContent: buildClaudeContent(fullText, toolCalls),
+    meta: {
+      provider,
+      costUSD: calculateCost(provider, inputTokens, outputTokens),
+      latencyMs
+    }
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
 // PUBLIC STREAMING ENTRY POINT
 // Same contract as callLLM but calls onTextDelta(text) for each
-// text chunk as it arrives. Non-Claude providers fall back to
-// non-streaming and emit the full text as a single callback.
+// text chunk as it arrives.
 // ─────────────────────────────────────────────────────────────
 async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNumber, maxTokens } = {}, onTextDelta) {
   const primaryProvider = CONFIG.provider;
@@ -470,8 +599,7 @@ async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNu
     if (primaryProvider === 'claude') {
       normalized = await callClaudeStream(systemPrompt, messages, tools, { maxTokens }, onTextDelta);
     } else {
-      normalized = await callOpenAICompat(primaryProvider, systemPrompt, messages, tools);
-      if (onTextDelta && normalized.text) onTextDelta(normalized.text);
+      normalized = await callOpenAICompatStream(primaryProvider, systemPrompt, messages, tools, { maxTokens }, onTextDelta);
     }
   } catch (primaryErr) {
     console.error(`❌ Primary LLM provider (${primaryProvider}) failed (stream):`, primaryErr.message);
@@ -479,7 +607,7 @@ async function callLLMStream(systemPrompt, messages, tools, { sessionId, phoneNu
     if (CONFIG.fallback && CONFIG.fallback !== primaryProvider) {
       console.log(`🔄 Falling back to ${CONFIG.fallback} (stream)...`);
       try {
-        normalized = await dispatchToProvider(CONFIG.fallback, systemPrompt, messages, tools);
+        normalized = await dispatchToProvider(CONFIG.fallback, systemPrompt, messages, tools, { maxTokens });
         wasFallback = true;
         normalized.meta.provider = CONFIG.fallback;
         if (onTextDelta && normalized.text) onTextDelta(normalized.text);

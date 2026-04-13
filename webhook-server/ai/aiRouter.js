@@ -45,12 +45,21 @@ async function fastProductSearch(query, session) {
 
     // Parse query into parts for keyword fallback
     const words = cleanQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+
+    // For multi-word queries, run phrase search AND word-OR search in parallel
+    // Phrase search finds "WATER PUMP" products; word-OR search catches single-word queries
+    const hasMultipleWords = words.length > 1;
+    const phrasePromise = hasMultipleWords
+      ? supabase.from('products').select('*').eq('is_active', true)
+          .ilike('name', `%${cleanQuery}%`)
+          .limit(10)
+      : Promise.resolve({ data: [], error: null });
     const keywordPromise = supabase
       .from('products').select('*').eq('is_active', true)
       .or(words.map(w => `name.ilike.%${w}%`).join(','))
-      .limit(10);
+      .limit(20);
 
-    const [queryEmbedding, keywordRes] = await Promise.all([embeddingPromise, keywordPromise]);
+    const [queryEmbedding, phraseRes, keywordRes] = await Promise.all([embeddingPromise, phrasePromise, keywordPromise]);
 
     const { data: vectorData, error: vectorError } = await supabase.rpc('match_products_nim', {
       query_embedding: queryEmbedding,
@@ -58,24 +67,33 @@ async function fastProductSearch(query, session) {
       match_count: 5
     });
 
-    // ── Smart merge: exact name matches beat vector similarity ──
+    // ── Smart merge: phrase matches > exact name matches > vector similarity ──
     // Vector search for "water pump" can return fuel/oil pumps (semantically close).
-    // Keyword search finds actual WATER PUMP products. Prefer keyword results
-    // when they contain the full query phrase in the product name.
+    // Phrase search finds products with "WATER PUMP" literally in the name.
+    // Word-OR search finds products matching any word, then filters for ALL words.
     const queryLower = cleanQuery.toLowerCase();
     const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
     const vecResults = (!vectorError && vectorData && vectorData.length > 0) ? vectorData : [];
+    const phraseResults = (phraseRes.data && phraseRes.data.length > 0) ? phraseRes.data : [];
     const kwResults = (keywordRes.data && keywordRes.data.length > 0) ? keywordRes.data : [];
 
-    // Check if any keyword results contain ALL query words in their name (exact match)
+    // Check if any keyword results contain ALL query words in their name
     const exactMatches = kwResults.filter(p => {
       const nameLower = (p.name || '').toLowerCase();
       return queryWords.every(w => nameLower.includes(w));
     });
 
     let data;
-    if (exactMatches.length > 0) {
-      // Keyword found exact name matches — prefer these, then fill with vector
+    if (phraseResults.length > 0) {
+      // Phrase search found exact matches (e.g. "WATER PUMP" in name) — best quality
+      const phraseIds = new Set(phraseResults.map(p => p.id));
+      const extraExact = exactMatches.filter(p => !phraseIds.has(p.id));
+      const usedIds = new Set([...phraseIds, ...extraExact.map(p => p.id)]);
+      const extraVec = vecResults.filter(p => !usedIds.has(p.id));
+      data = [...phraseResults, ...extraExact, ...extraVec].slice(0, 10);
+      console.log(`[fast-search] phrase match: ${phraseResults.length} (+ ${extraExact.length} exact + ${extraVec.length} vector fill)`);
+    } else if (exactMatches.length > 0) {
+      // Word-OR found products with ALL query words in name
       const exactIds = new Set(exactMatches.map(p => p.id));
       const extraVec = vecResults.filter(p => !exactIds.has(p.id));
       data = [...exactMatches, ...extraVec].slice(0, 10);

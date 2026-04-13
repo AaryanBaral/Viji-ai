@@ -25,8 +25,12 @@ jest.mock('../shared', () => ({
 const { callLLM, callLLMStream, CONFIG } = require('../ai/llmGateway');
 
 describe('callLLMStream()', () => {
+  const originalProvider = CONFIG.provider;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    // Test Claude streaming path (still exists for fallback)
+    CONFIG.provider = 'claude';
     // Default: stream.on('text', cb) stores cb, finalMessage resolves with a message
     mockStreamOn.mockImplementation((event, cb) => {
       if (event === 'text') {
@@ -39,6 +43,10 @@ describe('callLLMStream()', () => {
       stop_reason: 'end_turn',
       usage: { input_tokens: 100, output_tokens: 20 }
     });
+  });
+
+  afterEach(() => {
+    CONFIG.provider = originalProvider;
   });
 
   test('calls onTextDelta for each text chunk', async () => {

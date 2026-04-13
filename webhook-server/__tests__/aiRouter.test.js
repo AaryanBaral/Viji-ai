@@ -26,17 +26,27 @@ jest.mock('../services/productService', () => ({
 }));
 
 // Mock shared — supabase.rpc + supabase.from needed for fastProductSearch
-const mockSupabaseChain = {
-  select: jest.fn().mockReturnThis(),
-  eq: jest.fn().mockReturnThis(),
-  or: jest.fn().mockReturnThis(),
-  ilike: jest.fn().mockReturnThis(),
-  limit: jest.fn().mockResolvedValue({ data: [], error: null }),
-};
+// Each .from() call returns its own chain so phrase + keyword queries resolve independently
+function createMockChain() {
+  const chain = {
+    select: jest.fn().mockReturnThis(),
+    eq: jest.fn().mockReturnThis(),
+    or: jest.fn().mockReturnThis(),
+    ilike: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockResolvedValue({ data: [], error: null }),
+  };
+  return chain;
+}
+const mockSupabaseChains = [];
+const mockFrom = jest.fn(() => {
+  const chain = createMockChain();
+  mockSupabaseChains.push(chain);
+  return chain;
+});
 jest.mock('../shared', () => ({
   supabase: {
     rpc: jest.fn(),
-    from: jest.fn(() => mockSupabaseChain),
+    from: mockFrom,
   },
   anthropic: { messages: { create: jest.fn() } },
   CUSTOMER_CARE_PHONE: '+977-9851069717'
@@ -290,12 +300,7 @@ describe('fastProductSearch()', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Reset keyword fallback chain to return empty by default
-    mockSupabaseChain.select.mockReturnThis();
-    mockSupabaseChain.eq.mockReturnThis();
-    mockSupabaseChain.or.mockReturnThis();
-    mockSupabaseChain.ilike.mockReturnThis();
-    mockSupabaseChain.limit.mockResolvedValue({ data: [], error: null });
+    mockSupabaseChains.length = 0;
   });
 
   test('with mock results → returns formatted string', async () => {

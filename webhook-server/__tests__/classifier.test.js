@@ -16,14 +16,14 @@ describe('classifyMessage()', () => {
     expect(result.route).toBe('ollama');
   });
 
-  test('"I need a water pump for Bolero" → claude (complex/product keyword)', () => {
+  test('"I need a water pump for Bolero" → gemini (complex/product keyword)', () => {
     const result = classifyMessage('I need a water pump for Bolero', emptySession);
-    expect(result.route).toBe('claude');
+    expect(result.route).toBe('gemini');
   });
 
-  test('"what is my order status" → claude (complex)', () => {
+  test('"what is my order status" → gemini (complex)', () => {
     const result = classifyMessage('what is my order status', emptySession);
-    expect(result.route).toBe('claude');
+    expect(result.route).toBe('gemini');
   });
 
   test('Nepali text "नमस्ते" → ollama (devanagari)', () => {
@@ -32,16 +32,16 @@ describe('classifyMessage()', () => {
     expect(result.model).toBe('qwen2.5:3b');
   });
 
-  test('"P0301 misfire" → claude (complex/technical keyword)', () => {
+  test('"P0301 misfire" → gemini (complex/technical keyword)', () => {
     // "P0301" matches PRODUCT_CODE_PATTERN /[A-Z]{2,3}[-]?\d{3,}/
     const result = classifyMessage('P0301 misfire', emptySession);
-    expect(result.route).toBe('claude');
+    expect(result.route).toBe('gemini');
   });
 
-  test('session with active cart → always routes to claude', () => {
+  test('session with active cart → always routes to gemini', () => {
     const sessionWithCart = { context: { cart: [{ product_code: 'BP001' }] } };
     const result = classifyMessage('ok', sessionWithCart);
-    expect(result.route).toBe('claude');
+    expect(result.route).toBe('gemini');
     expect(result.reason).toBe('cart_active');
   });
 
@@ -50,10 +50,10 @@ describe('classifyMessage()', () => {
     expect(result.route).toBe('ollama');
   });
 
-  test('message with product code → claude', () => {
+  test('message with product code → gemini', () => {
     const result = classifyMessage('I need BP0071N', emptySession);
     // BP0071N has 2 letters + digits — matches product code pattern
-    expect(result.route).toBe('claude');
+    expect(result.route).toBe('gemini');
   });
 });
 
@@ -82,8 +82,8 @@ describe('isSimpleProductQuery()', () => {
     expect(isSimpleProductQuery('hello')).toBe(false);
   });
 
-  test('"water pump?" → false (question mark)', () => {
-    expect(isSimpleProductQuery('water pump?')).toBe(false);
+  test('"water pump?" → true (question mark stripped, product keyword found)', () => {
+    expect(isSimpleProductQuery('water pump?')).toBe(true);
   });
 
   test('"I need brake pads for my Bolero truck now" → false (too many words)', () => {

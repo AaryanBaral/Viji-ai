@@ -56,14 +56,14 @@ function classifyMessage(messageText, session) {
 
   if (hasComplexKeyword || hasProductCode || hasCart || isLong) {
     return {
-      route: 'claude',
-      model: 'claude-sonnet-4-6',
+      route: 'gemini',
+      model: 'gemini-2.5-flash',
       reason: hasCart ? 'cart_active' : hasProductCode ? 'product_code' : hasComplexKeyword ? 'complex_keyword' : 'long_message'
     };
   }
   if (hasDevanagari) return { route: 'ollama', model: 'qwen2.5:3b', reason: 'devanagari_simple' };
   if (SIMPLE_GREETINGS.test(text) || SIMPLE_QUESTIONS.test(text)) return { route: 'ollama', model: 'qwen2.5:3b', reason: 'simple_english' };
-  return { route: 'claude', model: 'claude-sonnet-4-6', reason: 'default' };
+  return { route: 'gemini', model: 'gemini-2.5-flash', reason: 'default' };
 }
 
 module.exports = { classifyMessage, isSimpleProductQuery, stripPrefix, aiStats, DEVANAGARI_PATTERN };
