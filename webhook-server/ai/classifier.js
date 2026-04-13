@@ -21,10 +21,74 @@ const FAST_PATH_BLOCKERS = /\b(order|cart|status|problem|fix|repair|diagnos|issu
 // Stripped before fast-path matching AND before sending to vector search.
 const CONVERSATIONAL_PREFIX = /^(do you have|have you got|do you sell|do you stock|do you carry|can i get|can i have|can i see|can i buy|can i order|can you show me|can you show|can you find me|can you find|can you get me|can you get|can you search|could you show me|could you show|could you find me|could you find|i want|i need|i am looking for|i'm looking for|looking for|show me|give me|get me|find me|search for|look for|look up|please show me|please show|please find me|please find|please get me|please get|please search|pls show|pls find|let me see|make me see|display|mai chahiye|mujhe chahiye|chahiye|dedo|de do|dikhao|dikha do|batao|bata do)\s+/i;
 
+// ─── TYPO & COMPOUND-WORD NORMALIZATION ─────────────────────
+// Customers often type "breakpad", "brakepads", "oilfilter", etc.
+// This map corrects misspellings and splits compound words so the
+// classifier regex and keyword search can match them properly.
+const TYPO_MAP = {
+  // brake misspellings
+  'break': 'brake', 'braek': 'brake', 'brek': 'brake', 'brak': 'brake',
+  // filter misspellings
+  'filtar': 'filter', 'filtr': 'filter', 'fliter': 'filter',
+  // clutch misspellings
+  'cluch': 'clutch', 'cluth': 'clutch', 'clutc': 'clutch',
+  // bearing misspellings
+  'bering': 'bearing', 'bareing': 'bearing', 'bearin': 'bearing',
+  // gasket misspellings
+  'gaskit': 'gasket', 'gaskat': 'gasket', 'gascket': 'gasket',
+  // pad misspellings
+  'padd': 'pad',
+  // tube misspellings
+  'tub': 'tube',
+  // pump misspellings
+  'pamp': 'pump', 'pupm': 'pump',
+  // vehicle misspellings
+  'mahendra': 'mahindra', 'mehindra': 'mahindra', 'mahindr': 'mahindra',
+  'sukuzi': 'suzuki', 'suzki': 'suzuki', 'suzkui': 'suzuki',
+  'toyata': 'toyota', 'toyta': 'toyota',
+  'hundai': 'hyundai', 'hyundia': 'hyundai', 'hundayi': 'hyundai',
+  'maruthi': 'maruti', 'marui': 'maruti',
+};
+
+// Compound words that customers type without spaces: "breakpads" → "brake pads"
+// Splits compound words that are typed without a space.
+// Includes common misspellings of the prefix (break→brake, etc.).
+// Uses a replacer function to correct the prefix and insert a space.
+const COMPOUND_SPLITS = [
+  // brake + part (including "break" typo)
+  [/\b(br[ae][ae]k|brek|brak)(e?)(pads?|tubes?|discs?|drums?|shoes?|hoses?)\b/gi, (_m, _pfx, _e, part) => 'brake ' + part],
+  // oil/air/fuel/cabin + filter (including "filtar/fliter" typo)
+  [/\b(oil|air|fuel|cabin)(filt[ae]rs?|fliters?)\b/gi, (_m, pfx, part) => pfx + ' ' + part.replace(/filt[ae]r/i, 'filter').replace(/fliter/i, 'filter')],
+  // water/oil/fuel + pump
+  [/\b(water|oil|fuel)(pumps?|pamps?)\b/gi, (_m, pfx, part) => pfx + ' ' + part.replace(/pamp/i, 'pump')],
+  // clutch + plate/kit (including "cluch" typo)
+  [/\b(clutch|cluch|cluth)(plates?|kits?)\b/gi, (_m, _pfx, part) => 'clutch ' + part],
+  // fan + belt
+  [/\b(fan)(belts?)\b/gi, '$1 $2'],
+];
+
+/**
+ * Normalize common typos and split compound words.
+ * "breakpads" → "brake pad", "mahendra filter" → "mahindra filter"
+ */
+function normalizeQuery(text) {
+  // Step 1: fix individual word typos
+  let normalized = text.replace(/\b[a-zA-Z]+\b/g, (word) => {
+    const lower = word.toLowerCase();
+    return TYPO_MAP[lower] || word;
+  });
+  // Step 2: split compound words (e.g. "brakepad" → "brake pad")
+  for (const [pattern, replacement] of COMPOUND_SPLITS) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+  return normalized;
+}
+
 // Strip conversational prefix from a query, returning the product-focused part
 function stripPrefix(text) {
   const t = text.trim().replace(/[?!.]+$/, '').trim();  // also strip trailing punctuation
-  return t.replace(CONVERSATIONAL_PREFIX, '').trim() || t;
+  const stripped = t.replace(CONVERSATIONAL_PREFIX, '').trim() || t;
+  return normalizeQuery(stripped);
 }
 
 // Returns true for short product discovery queries (1-8 words, no question/order intent)
@@ -66,4 +130,4 @@ function classifyMessage(messageText, session) {
   return { route: 'gemini', model: 'gemini-2.5-flash', reason: 'default' };
 }
 
-module.exports = { classifyMessage, isSimpleProductQuery, stripPrefix, aiStats, DEVANAGARI_PATTERN };
+module.exports = { classifyMessage, isSimpleProductQuery, stripPrefix, normalizeQuery, aiStats, DEVANAGARI_PATTERN };

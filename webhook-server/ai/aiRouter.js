@@ -5,7 +5,7 @@
 const axios = require('axios');
 const { CUSTOMER_CARE_PHONE, supabase } = require('../shared');
 const { handleConversation, handleConversationStream } = require('./handleConversation');
-const { classifyMessage, isSimpleProductQuery, stripPrefix, aiStats } = require('./classifier');
+const { classifyMessage, isSimpleProductQuery, stripPrefix, normalizeQuery, aiStats } = require('./classifier');
 const { getEmbedding } = require('../db/embeddingService');
 const { getAvailabilityStatus } = require('../services/productService');
 const { CONFIG } = require('./llmGateway');
@@ -36,7 +36,7 @@ async function callOllama(message, model, session) {
 async function fastProductSearch(query, session) {
   const start = Date.now();
   try {
-    // Strip conversational prefix for cleaner vector + keyword search
+    // Strip conversational prefix + normalize typos/compounds for cleaner search
     const cleanQuery = stripPrefix(query);
     console.log(`[fast-search] query="${query}" → clean="${cleanQuery}"`);
 
@@ -276,9 +276,12 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
     }
   }
 
+  // ── Normalize typos/compounds for all downstream paths ────
+  const normalizedText = normalizeQuery(messageText);
+
   // ── FAST PATH: simple product queries → vector search only ─
-  if (isSimpleProductQuery(messageText) && !session.context?.cart?.length) {
-    const fastResult = await fastProductSearch(messageText, session);
+  if (isSimpleProductQuery(normalizedText) && !session.context?.cart?.length) {
+    const fastResult = await fastProductSearch(normalizedText, session);
     if (fastResult) {
       const ms = Date.now() - start;
       console.log(`[fast-path] ${ms}ms`);
@@ -288,8 +291,8 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
   }
 
   // ── NORMAL PATH ───────────────────────────────────────────
-  const classification = classifyMessage(messageText, session);
-  console.log(`🔀 AI Router: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}" → ${classification.route}/${classification.model} (${classification.reason})`);
+  const classification = classifyMessage(normalizedText, session);
+  console.log(`🔀 AI Router: "${normalizedText.substring(0, 50)}${normalizedText.length > 50 ? '...' : ''}" → ${classification.route}/${classification.model} (${classification.reason})`);
 
   const llmModel = CONFIG.models[CONFIG.provider] || CONFIG.provider;
 
@@ -301,8 +304,8 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
   if (classification.route === 'claude') {
     aiStats.claude++;
     const handler = (stream && onChunk)
-      ? handleConversationStream(messageText, session, conversationHistory, onChunk)
-      : handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
+      ? handleConversationStream(normalizedText, session, conversationHistory, onChunk)
+      : handleConversation(normalizedText, session, conversationHistory, { maxTokens: llmMaxTokens });
     const result = await handler;
     console.log('[router] LLM response in', (Date.now() - start) + 'ms');
     return { ...result, model: llmModel };
@@ -312,15 +315,15 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
     console.log('[router] Ollama disabled — routing to LLM directly');
     aiStats.claude++;
     const handler = (stream && onChunk)
-      ? handleConversationStream(messageText, session, conversationHistory, onChunk)
-      : handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
+      ? handleConversationStream(normalizedText, session, conversationHistory, onChunk)
+      : handleConversation(normalizedText, session, conversationHistory, { maxTokens: llmMaxTokens });
     const result = await handler;
     console.log('[router] LLM response in (ollama disabled)', (Date.now() - start) + 'ms');
     return { ...result, model: llmModel };
   }
 
   try {
-    const ollamaResponse = await callOllama(messageText, classification.model, session);
+    const ollamaResponse = await callOllama(normalizedText, classification.model, session);
     console.log(`✅ Ollama (${classification.model}) responded`);
     console.log('[router] Ollama response in', (Date.now() - start) + 'ms');
     if (classification.model === 'qwen2.5:3b') aiStats.ollama_nepali++;
@@ -330,7 +333,7 @@ async function routeMessage(messageText, session, conversationHistory, { stream,
     console.warn('[aiRouter] Ollama failed, falling back to Claude:', error.message);
     aiStats.fallbacks++;
     aiStats.claude++;
-    const result = await handleConversation(messageText, session, conversationHistory, { maxTokens: llmMaxTokens });
+    const result = await handleConversation(normalizedText, session, conversationHistory, { maxTokens: llmMaxTokens });
     console.log('[router] Claude response in (ollama fallback)', (Date.now() - start) + 'ms');
     return result;
   }
